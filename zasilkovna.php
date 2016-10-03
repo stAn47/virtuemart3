@@ -80,8 +80,16 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 	 * @author Valérie Isaksen
 	 * @author Max Milbers
 	 */
-	public function plgVmOnShowOrderFEShipment($virtuemart_order_id, $virtuemart_shipmentmethod_id, &$shipment_name) {
-		$this->onShowOrderFE($virtuemart_order_id, $virtuemart_shipmentmethod_id, $shipment_name);
+	public function plgVmOnShowOrderFEShipment($virtuemart_order_id, $virtuemart_shipmentmethod_id, &$shipment_name)
+	{
+		if (!($this->selectedThisByMethodId ($virtuemart_shipmentmethod_id))) {
+			return NULL;
+		}
+		
+		
+		$shipment_name .= $this->getOrderShipmentHtml($virtuemart_order_id); 
+		
+		
 	}
 
 	/**
@@ -109,31 +117,41 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 		$zas_orders = VmModel::getModel('zasilkovna_orders');
 		$fromCurrency = $zas_model->getCurrencyCode($order['details']['BT']->order_currency);
 
-		//convert from payment currency to branch currency
-		$price_in_branch_currency = $zas_orders->convertToBranchCurrency($order['details']['BT']->order_total, $fromCurrency, $_SESSION['branch_currency']);
 
-		$values['virtuemart_order_id'] = $order['details']['BT']->virtuemart_order_id;
+		$session = JFactory::getSession(); 
+		$branch_currency = $session->get('branch_currency', 'CZK'); 
+		$branch_id = $session->get('branch_id', 0); 
+		$branch_name_street = $session->get('branch_name_street', ''); 
+		
+		
+		
+		//convert from payment currency to branch currency
+		$price_in_branch_currency=$zas_orders->convertToBranchCurrency($order['details']['BT']->order_total,$fromCurrency,$branch_currency);
+
+		$values['virtuemart_order_id']			= $order['details']['BT']->virtuemart_order_id;
 		$values['virtuemart_shipmentmethod_id'] = $order['details']['BT']->virtuemart_shipmentmethod_id;
-		$values['order_number'] = $order['details']['BT']->order_number;
-		$values['zasilkovna_packet_id'] = 0;
-		$values['zasilkovna_packet_price'] = $price_in_branch_currency;
-		$values['branch_id'] = $_SESSION['branch_id'];
-		$values['branch_currency'] = $_SESSION['branch_currency'];
-		$values['branch_name_street'] = $_SESSION['branch_name_street'];
-		$values['email'] = $cart->BT['email'];
-		$values['phone'] = $cart->BT['phone_1'] ? $cart->BT['phone_1'] : $cart->BT['phone_2'];
-		$values['first_name'] = $cart->BT['first_name'];
-		$values['last_name'] = $cart->BT['last_name'];
-		$values['address'] = $cart->BT['address_1'];
-		$values['city'] = $cart->BT['city'];
-		$values['zip_code'] = $cart->BT['zip'];
-		$values['adult_content'] = 0;
-		$values['is_cod'] = -1; //depends on actual settings of COD payments until its set manually in administration
-		$values['exported'] = 0;
-		$values['shipment_name'] = $method->shipment_name;
-		$values['shipment_cost'] = $this->getCosts($cart, $method, "");
-		$values['tax_id'] = $method->tax_id;
+		$values['order_number']					= $order['details']['BT']->order_number;
+		$values['zasilkovna_packet_id']			= 0;
+		$values['zasilkovna_packet_price']		= $price_in_branch_currency;
+		$values['branch_id']					= $branch_id;
+		$values['branch_currency']				= $branch_currency;
+		$values['branch_name_street']			= $branch_name_street;
+		$values['email']						= $cart->BT['email'];
+		$values['phone']						= $cart->BT['phone_1'] ? $cart->BT['phone_1'] : $cart->BT['phone_2'];
+		$values['first_name']					= $cart->BT['first_name'];
+		$values['last_name']					= $cart->BT['last_name'];
+		$values['address']						= $cart->BT['address_1'];
+		$values['city']							= $cart->BT['city'];
+		$values['zip_code']						= $cart->BT['zip'];
+		$values['adult_content']				= 0;
+		$values['is_cod']						= -1; //depends on actual settings of COD payments until its set manually in administration
+		$values['exported']					= 0;
+		$values['shipment_name']				= $method->shipment_name;
+		$values['shipment_cost']				= $this->getCosts ($cart, $method, "");
+		$values['tax_id']							= $method->tax_id;
 		$this->storePSPluginInternalData($values);
+
+
 
 		return true;
 	}
@@ -226,19 +244,34 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 	 * @return null if the payment was not selected, true if the data is valid, error message if the data is not vlaid
 	 *
 	 */
-	public function plgVmOnSelectCheckShipment(VirtueMartCart &$cart) {
-		if($this->OnSelectCheck($cart)) {
-			session_start();
-			$_SESSION['branch_id'] = JRequest::getVar('branch_id', '', 'post', 'STRING', JREQUEST_ALLOWHTML);
-			$_SESSION['branch_currency'] = JRequest::getVar('branch_currency', '', 'post', 'STRING', JREQUEST_ALLOWHTML);
-			$_SESSION['branch_name_street'] = JRequest::getVar('branch_name_street', '', 'post', 'STRING', JREQUEST_ALLOWHTML);
+	public function plgVmOnSelectCheckShipment(VirtueMartCart &$cart)
+	{
+		// these 2 functions will make sure that this plugin won't interfere with the 3rd party shipment methods
+		if (!$this->selectedThisByMethodId ($cart->virtuemart_shipmentmethod_id)) {
+			return NULL; // Another method was selected, do nothing
 		}
-		else {
-			$_SESSION['branch_id'] = -1;
+		if (!($method = $this->getVmPluginMethod ($cart->virtuemart_shipmentmethod_id))) {
+			return NULL; // Another method was selected, do nothing
+		}
+		if ($this->OnSelectCheck($cart)) {
+		// init the session if not yet initialized: 
+		   $session = JFactory::getSession(); 
+		
+		if ($this->OnSelectCheck($cart)) {
+			$session->set('branch_id', JRequest::getInt('branch_id', 0));
+			$session->set('branch_currency', JRequest::getVar('branch_currency', ''));
+			$session->set('branch_name_street', JRequest::getVar('branch_name_street', ''));
+			
+		} 
+		
+		// this will break any 3rd party plugins: 
+		//$cart->virtuemart_paymentmethod_id = 0;//reset selected payment. Payment options are shown depending on selected shipment
+		    return true; 
 		}
 		
-		$cart->virtuemart_paymentmethod_id = 0;//reset selected payment. Payment options are shown depending on selected shipment
-		return $this->OnSelectCheck($cart);
+		return false; 
+		
+		
 	}
 
 	/**
@@ -275,7 +308,10 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 
 		$html = array();
 		$method_name = $this->_psType . '_name';
-		$prevSelectedBranch = $_SESSION['branch_id'];
+		
+		$session = JFactory::getSession(); 
+		$prevSelectedBranch=$session->get('branch_id', 0);
+		
 		$js_html .= '<script src="' . $js_url . '"></script>';
 		$js_html .= '<script language="javascript" type="text/javascript">
 		var zasilkovnaDefaultSelect = ' . $zasConfig['zasilkovna_default_select'] . ' ;
@@ -459,7 +495,7 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 		$taxDisplay = ($taxDisplay == -1) ? JText::_('COM_VIRTUEMART_PRODUCT_TAX_NONE') : $taxDisplay;
 
 		$html = '<table class="adminlist">' . "\n";
-		$html .= $this->getHtmlHeaderBE();
+		JFactory::getLanguage()->load('plg_vmshipment_zasilkovna'); 
 		$html .= $this->getHtmlRowBE('WEIGHT_COUNTRIES_SHIPPING_NAME', $shipinfo->shipment_name);
 		$html .= $this->getHtmlRowBE('BRANCH', $shipinfo->branch_name_street);
 		$html .= $this->getHtmlRowBE('CURRENCY', $shipinfo->branch_currency);
@@ -497,7 +533,13 @@ class plgVmShipmentZasilkovna extends vmPSPlugin {
 	 * @author Valerie Isaksen
 	 */
 	function plgVmonShowOrderPrint($order_number, $method_id) {
-		return $this->onShowOrderPrint($order_number, $method_id);
+		if (!($this->selectedThisByMethodId ($virtuemart_shipmentmethod_id))) {
+			return NULL;
+		}
+		
+		$html = $this->onShowOrderPrint($order_number, $virtuemart_shipmentmethod_id);
+		
+		return $html; 
 	}
 
 	function plgVmDeclarePluginParamsShipment($name, $id, &$data) {
